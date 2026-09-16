@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#
+# FAKE searchsploit shim for automated tests only (never used against
+# a real exploitdb installation). Mimics the CLI surface the tool uses:
+#   searchsploit -t --colour=0 <title>
+#   searchsploit -t --colour=0 -j <title>
+#
+# Controlled dataset:
+#   vsftpd 2.3.4  -> EDB-17491 (backdoor, remote)
+#   samba 3.0.20  -> EDB-16320 (usermap_script command execution, remote)
+#   anything else -> no results
+
+set -u
+
+if [[ "${FAKE_MODE:-}" == "garbage" ]]; then
+    cat <<'GARBAGE'
+=======================================================================
+banner garbage with no structure
+ Exploit Title                                                                    |  Path
+-------------------------------------------------------------------------------
+this line has no pipe so it is ignored
+-----------------------------------------------------------------
+GARBAGE
+    exit 1
+fi
+
+MODE=raw
+TERM=""
+for a in "$@"; do
+    case "$a" in
+        -j|--json) MODE=json ;;
+        -*) : ;;
+        *) TERM="${TERM:+$TERM }$a" ;;
+    esac
+done
+
+case "$TERM" in
+    *vsftpd*2.3.4*|*"vsftpd 2.3.4"*)
+        TITLE="vsftpd 2.3.4 - Backdoor Command Execution (Metasploit)"
+        PATH="exploits/linux/remote/17491.rb"
+        EDB="17491"
+        TYPE="remote"
+        PLATFORM="linux"
+        FOUND=0
+        ;;
+    *samba*3.0.20*|*"samba 3.0.20"*)
+        TITLE="Samba 3.0.20 < 3.0.25rc3 - 'Username' map script Command Execution (Metasploit)"
+        PATH="exploits/multi/samba/16320.rb"
+        EDB="16320"
+        TYPE="remote"
+        PLATFORM="linux"
+        FOUND=0
+        ;;
+    *)
+        TITLE=""
+        PATH=""
+        EDB=""
+        TYPE=""
+        PLATFORM=""
+        FOUND=1
+        ;;
+esac
+
+if [[ "$MODE" == "json" ]]; then
+    if [[ "$FOUND" == "0" ]]; then
+        cat <<JSON
+{"RESULTS_EXPLOIT": [{"Title": "$TITLE", "EDB-ID": "$EDB", "Date": "2011-07-03", "Author": "test-shim", "Type": "$TYPE", "Platform": "$PLATFORM", "Path": "$PATH"}], "RESULTS_PAPERS": [], "RESULTS_SHELLCODE": []}
+JSON
+    else
+        cat <<'JSON'
+{"RESULTS_EXPLOIT": [], "RESULTS_PAPERS": [], "RESULTS_SHELLCODE": []}
+JSON
+    fi
+else
+    echo "----------------------------------------------------------------------------------------------"
+    echo " Exploit Title                                                                    |  Path"
+    echo "----------------------------------------------------------------------------------------------"
+    if [[ "$FOUND" == "0" ]]; then
+        printf ' %-90s | %s\n' "$TITLE" "$PATH"
+    fi
+    echo "----------------------------------------------------------------------------------------------"
+fi
+
+exit "$FOUND"

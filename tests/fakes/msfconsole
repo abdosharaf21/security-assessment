@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# FAKE msfconsole shim for automated tests only (never touches a real
+# Metasploit installation). Mimics the CLI surface the tool uses:
+#   msfconsole -q -r <resource_file>
+#
+# Behavior driven by the resource file content:
+#   vsftpd_234_backdoor module -> prints a fake open session + sessions -C output
+#   samba usermap_script module -> prints an explicit "no session" message
+#   anything else              -> generic completion, no session
+
+set -u
+
+RC=""
+prev=""
+for a in "$@"; do
+    if [[ "$prev" == "-r" ]]; then
+        RC="$a"
+    fi
+    prev="$a"
+done
+
+if [[ -z "$RC" || ! -f "$RC" ]]; then
+    echo "[+] (fake) msfconsole started with no resource file"
+    exit 0
+fi
+
+if grep -q "vsftpd_234_backdoor" "$RC"; then
+    cat <<'OUT'
+[*] Started reverse TCP handler
+[*] 203.0.113.7:21 - 203.0.113.7:21 - CONNECTED
+[*] Command shell session 1 opened (192.168.1.11:42101 -> 203.0.113.7:21)
+[*] Session 1 created.
+SAT_HOSTNAME_START
+metasploitable
+SAT_USER_START
+uid=0(root) gid=0(root)
+SAT_OS_START
+Linux metasploitable 2.6.24-16-server i686 GNU/Linux
+SAT_NET_START
+eth0      inet addr:203.0.113.7  Bcast:203.0.113.255  Mask:255.255.255.0
+SAT_EVIDENCE_END
+OUT
+    exit 0
+fi
+
+if grep -q "usermap_script" "$RC"; then
+    cat <<'OUT'
+[*] Started bind TCP handler
+[-] Exploit completed, but no session was created.
+OUT
+    exit 0
+fi
+
+echo "[+] (fake) msfconsole finished, no session"
+exit 0

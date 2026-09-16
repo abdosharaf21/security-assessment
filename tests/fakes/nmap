@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# Fake nmap for OFFLINE test runs. Never touches the network.
+#
+# Behavior:
+#   FAKE_NMAP_UP=1              -> target appears UP with vsftpd 2.3.4 on 21/tcp
+#   FAKE_NMAP_UP=<path to xml>  -> target appears UP with that XML content
+#   otherwise                   -> target appears DOWN
+#
+# Handles the argument patterns used by discovery.sh / enumeration.sh
+# (-oN <txt> -oX <xml>) and writes canned text/XML along those paths.
+
+set -uo pipefail
+
+args=("$@")
+out_txt=""
+out_xml=""
+target=""
+scan_has_sn=0
+scan_is_preflight=0
+
+i=0
+while (( i < ${#args[@]} )); do
+    a="${args[$i]}"
+    case "$a" in
+        -oN) out_txt="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
+        -oX) out_xml="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
+        -sn) scan_has_sn=1; i=$((i + 1)) ;;
+        -*) i=$((i + 1)) ;;
+        *) target="$a"; i=$((i + 1)) ;;
+    esac
+done
+
+if [[ "$out_txt" == *".preflight.txt" ]]; then
+    scan_is_preflight=1
+fi
+
+XML_FOR_TARGET=""
+if [[ "${FAKE_NMAP_UP:-}" == 0 || "${FAKE_NMAP_UP:-}" == "0" ]]; then
+    XML_FOR_TARGET="down"
+elif [[ "${FAKE_NMAP_UP:-}" == 1 || "${FAKE_NMAP_UP:-}" == "1" ]]; then
+    XML_FOR_TARGET="up"
+elif [[ -n "${FAKE_NMAP_UP:-}" && -f "${FAKE_NMAP_UP}" ]]; then
+    XML_FOR_TARGET="$FAKE_NMAP_UP"
+else
+    XML_FOR_TARGET="down"
+fi
+
+write_up_txt() {
+    cat <<EOF
+Starting Nmap fake for $target
+Nmap scan report for $target
+Host is up (0.0010s latency).
+PORT   STATE SERVICE VERSION
+21/tcp open  ftp     vsftpd 2.3.4
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned
+EOF
+}
+
+write_down_txt() {
+    cat <<EOF
+Starting Nmap fake for $target
+Nmap scan report for $target
+0 hosts up
+Nmap done: scanning 1 IP address
+EOF
+}
+
+# Always write the text artifact (discovery greps it for "Host is up").
+if [[ "$XML_FOR_TARGET" == "down" ]]; then
+    txt="$(write_down_txt)"
+else
+    txt="$(write_up_txt)"
+fi
+
+if [[ -n "$out_txt" ]]; then
+    printf '%s\n' "$txt" > "$out_txt"
+fi
+
+# XML is only meaningful for enumeration-style scans.
+if [[ -n "$out_xml" && "$XML_FOR_TARGET" != "down" ]]; then
+    if [[ -f "$XML_FOR_TARGET" ]]; then
+        cp "$XML_FOR_TARGET" "$out_xml"
+    else
+        cat > "$out_xml" <<EOF
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" version="fake" start="1715000000" xmloutputversion="1.04">
+<scaninfo type="syn" protocol="tcp"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1715000000" endtime="1715000100">
+<status state="up" reason="syn-ack"/>
+<address addr="$target" addrtype="ipv4"/>
+<hostnames><hostname name="metasploitable" type="PTR"/></hostnames>
+<ports>
+<port protocol="tcp" portid="21">
+<state state="open" reason="syn-ack"/>
+<service name="ftp" product="vsftpd" version="2.3.4" method="probed" conf="10">
+<cpe>cpe:/a:vsftpd:vsftpd:2.3.4</cpe>
+</service>
+</port>
+</ports>
+</host>
+<runstats>
+<finished time="1715000100" timestr="Mon" exit="success"/>
+<hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>
+EOF
+    fi
+fi
+
+exit 0

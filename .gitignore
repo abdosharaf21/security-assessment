@@ -1,0 +1,25 @@
+# Runtime artifacts
+output/*
+reports/*
+
+# Keep directory structure
+!output/.gitkeep
+!reports/.gitkeep
+
+# Local/editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" version="7.80" start="1715000100" xmloutputversion="1.04">
+  <scaninfo type="syn" protocol="tcp" numservices="3" services="22-80"/>
+  <verbose level="0"/>
+  <debugging level="0"/>
+  <host starttime="1715000100" endtime="1715000100">
+    <status state="up" reason="syn-ack"/>
+    <address addr="203.0.113.8" addrtype="ipv4"/>
+    <hostnames/>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="4.7p1 Debian 8ubuntu1" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="Apache httpd" version="2.2.8 (Ubuntu) DAV/2" method="probed" conf="10">
+          <cpe>cpe:/a:apache:http_server:2.2.8</cpe>
+        </service>
+      </port>
+    </ports>
+    <times srtt="1000" rttvar="500" to="100000"/>
+  </host>
+  <runstats>
+    <finished time="1715000100" timestr="Mon" elapsed="5" exit="success"/>
+    <hosts up="1" down="0" total="1"/>
+  </runstats>
+</nmaprun>
