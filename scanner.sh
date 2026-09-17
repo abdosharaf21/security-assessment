@@ -368,6 +368,13 @@ cmd_help() {
     echo "       vulnerabilities, correlation, exploitation [approval required],"
     echo "       evidence, report)"
     echo "  $0 <target> all    (discovery + enumeration only)"
+    echo
+    echo "Enumeration V2 (Phase 2) - multi-stage:"
+    echo "  Stage 1 discovers ports (ENUM_PORT_MODE: top|all|custom; top-N default),"
+    echo "  Stage 2 runs -sV + --script(default) -Pn -n ONLY on discovered ports,"
+    echo "  Stage 3 dispatches read-only service handlers (modules/service_handlers/)."
+    echo "  Exit 2 = unreachable, 3 = reachable with zero open ports (evidence)."
+    echo "  NMAP_SCRIPTS defaults to 'default'; 'vuln' is opt-in and never auto-run."
 }
 
 cmd_scan() {

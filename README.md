@@ -80,9 +80,14 @@ sudo ./modules/enumeration.sh 192.168.56.101   # enables OS detection
 | Variable | Default | Meaning |
 |---|---|---|
 | `NMAP_TIMING` | `-T4` | Nmap timing |
-| `NMAP_PORTS` | `-p-` | Port selection |
+| `ENUM_PORT_MODE` | `top` | Enumeration V2 stage-1 port selection: `top` (top-N), `all` (`-p-`), `custom` (`NMAP_PORTS`) |
+| `ENUM_TOP_PORTS` | `100` | Number of top ports used by `ENUM_PORT_MODE=top` |
+| `NMAP_PORTS` | `-p-` | Explicit port list/range; an exported `NMAP_PORTS` is always honored as `custom` |
 | `NMAP_SERVICE_DETECTION` | `-sV` | Version detection |
-| `NMAP_SCRIPTS` | `default,vuln` | NSE scripts |
+| `NMAP_SCRIPTS` | `default` | NSE scripts (safe default; `vuln` is opt-in and never auto-run) |
+| `ENUM_DISCOVERY_TIMEOUT` | `300` | Stage-1 timeout (seconds, bounded via `timeout`) |
+| `ENUM_SERVICE_TIMEOUT` | `600` | Stage-2 timeout (seconds) |
+| `ENUM_HANDLER_TIMEOUT` | `30` | Per-stage-3-handler timeout (seconds) |
 | `SEARCHSPLOIT_ENABLED` | `true` | Enable Phase 3 lookups |
 | `METASPLOIT_ENABLED` | `true` | Enable Phase 5 runner |
 | `AUTO_EXPLOIT` | `false` | Never auto-run candidates |
@@ -94,6 +99,35 @@ sudo ./modules/enumeration.sh 192.168.56.101   # enables OS detection
 Metasploit module. Only verified lab mappings are included; unmapped findings
 are reported but never executed.
 
+## Enumeration V2 (Phase 2)
+
+Phase 2 is a three-stage pipeline with evidence-first behavior:
+
+1. **Stage 1 - Port discovery** (`nmap -T4 -Pn -n -sT --max-retries 1 ...`)
+   selects ports per `ENUM_PORT_MODE` (top-N / all / custom). A host that
+   answers no probe is reported `unreachable` and the expensive scan is never
+   started (`exit 2`). A reachable host with zero open ports is a valid,
+   evidence-based result (`exit 3`), never retried.
+2. **Stage 2 - Targeted service enumeration** runs `-sV` + NSE `default`
+   (`-sC` equivalent) **only against the discovered ports**, with OS detection
+   (`-O`) when run as root. The Nmap XML is parsed with the Python standard
+   library (`xml.etree.ElementTree`); malformed/truncated XML or a missing
+   `python3` falls back to the text artifact and the run is recorded honestly
+   as `status=partial` - diagnostics are never silently discarded.
+3. **Stage 3 - Modular service handlers** (`modules/service_handlers/*.sh`)
+   enumerate each service. Handlers declare which services they `HANDLES`
+   (e.g. `HANDLES="http https"`); a built-in banner extractor plus an
+   HTTP(S) reader are included. Handlers are **read-only by construction**,
+   bounded by `ENUM_HANDLER_TIMEOUT`, and record
+   `skipped-dependency`/`error`/`ok` per service in `handlers.tsv` - a handler
+   problem never fails the phase.
+
+Per-run artifacts (never clobbered, timestamped): `*.ports.nmap.txt`,
+`*.ports.txt`, `*.ports.tsv`, `*.ports.xml`, `*.txt`, `*.xml`,
+`*.services.tsv`, `*.services.txt`, `*.status.txt`, `*.diagnostics.log`, and a
+`*.stage3/` directory. `report.sh` and Phase 3 consume the latest `*.txt` /
+`*.xml` as before.
+
 ## Architecture
 
 ```
@@ -104,9 +138,10 @@ lib/assessment.sh             assessment manager (IDs, manifest, resume plan)
   modules/vulnerability.sh    Phase 3  (XML -> Nmap services -> SearchSploit)
   modules/correlation.sh      Phase 4  (deterministic confidence + severity)
   modules/exploitation.sh     Phase 5  (mapping, resource script, session detect)
-  modules/evidence.sh         Phase 6  (honest session/evidence record)
+modules/evidence.sh         Phase 6  (honest session/evidence record)
   modules/report.sh           Phase 7  (Markdown + HTML)
-lib/common.sh                 shared helpers (config, exit codes, artifact discovery)
+  modules/service_handlers/   Phase 2b (read-only service handlers, opt-in)
+  lib/common.sh               shared helpers (config, exit codes, artifact discovery)
 config/                       config.conf, exploit_mapping.conf
 output/                       per-phase artifacts per target
 output/assessments/           per-assessment isolated runs (manifest.json + phases)
@@ -130,7 +165,7 @@ than fabricated. `status` shows the on-disk state per phase.
 | 0 | Success (findings may be zero - see `summary.txt`) |
 | 1 | Usage / configuration / technical error |
 | 2 | No relevant data (host down, no XML, no session, no findings) |
-| 3 | Required dependency missing or disabled |
+| 3 | Required dependency missing or disabled; enumeration: host reachable but zero open ports |
 | 4 | Exploitation only: no candidates or no module mapping |
 | 5 | Exploitation only: cancelled/declined by the user |
 
@@ -167,8 +202,11 @@ are required for the offline suite. The suite covers the phase pipeline plus the
 single-phase rule (a `discovery|...|exploit|evidence|report` command runs only
 that phase; only `full` chains the pipeline and only after a gated approval),
 assessment isolation/manifest state, `status`, `resume` (skip/retry, `--dry-run`
-has zero side effects), `preflight`, dry-run planning, and corrupt-manifest
-refusal.
+has zero side effects), `preflight`, dry-run planning, corrupt-manifest
+refusal, and Enumeration V2 (normal multi-stage run, no-open reachable host,
+malformed XML fallback, Nmap failure, missing dependency, port-selection modes,
+targeted `-sV -sC` on discovered ports, safe default NSE, and denied-approval
+full-scan honesty).
 
 ```
 ./tests/test_tool.sh                      # offline suite (no network)

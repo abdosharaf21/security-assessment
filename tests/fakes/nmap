@@ -5,7 +5,11 @@
 # Behavior:
 #   FAKE_NMAP_UP=1              -> target appears UP with vsftpd 2.3.4 on 21/tcp
 #   FAKE_NMAP_UP=<path to xml>  -> target appears UP with that XML content
-#   otherwise                   -> target appears DOWN
+#   FAKE_NMAP_UP=0 or unset     -> target appears DOWN
+#   FAKE_NMAP_NO_OPEN=1         -> target UP but zero open ports (closed ports)
+#   FAKE_NMAP_CORRUPT=1         -> write intentionally-invalid XML (txt stays fine)
+#   FAKE_NMAP_FAIL=1            -> pretend nmap crashed: no artifacts, exit 1
+#   FAKE_NMAP_LOG=<file>        -> append the full argv of every invocation
 #
 # Handles the argument patterns used by discovery.sh / enumeration.sh
 # (-oN <txt> -oX <xml>) and writes canned text/XML along those paths.
@@ -16,8 +20,6 @@ args=("$@")
 out_txt=""
 out_xml=""
 target=""
-scan_has_sn=0
-scan_is_preflight=0
 
 i=0
 while (( i < ${#args[@]} )); do
@@ -25,25 +27,13 @@ while (( i < ${#args[@]} )); do
     case "$a" in
         -oN) out_txt="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
         -oX) out_xml="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
-        -sn) scan_has_sn=1; i=$((i + 1)) ;;
         -*) i=$((i + 1)) ;;
         *) target="$a"; i=$((i + 1)) ;;
     esac
 done
 
-if [[ "$out_txt" == *".preflight.txt" ]]; then
-    scan_is_preflight=1
-fi
-
-XML_FOR_TARGET=""
-if [[ "${FAKE_NMAP_UP:-}" == 0 || "${FAKE_NMAP_UP:-}" == "0" ]]; then
-    XML_FOR_TARGET="down"
-elif [[ "${FAKE_NMAP_UP:-}" == 1 || "${FAKE_NMAP_UP:-}" == "1" ]]; then
-    XML_FOR_TARGET="up"
-elif [[ -n "${FAKE_NMAP_UP:-}" && -f "${FAKE_NMAP_UP}" ]]; then
-    XML_FOR_TARGET="$FAKE_NMAP_UP"
-else
-    XML_FOR_TARGET="down"
+if [[ -n "${FAKE_NMAP_LOG:-}" ]]; then
+    printf '%s\n' "$*" >> "$FAKE_NMAP_LOG"
 fi
 
 write_up_txt() {
@@ -58,6 +48,18 @@ Nmap done: 1 IP address (1 host up) scanned
 EOF
 }
 
+write_noopen_txt() {
+    cat <<EOF
+Starting Nmap fake for $target
+Nmap scan report for $target
+Host is up (0.0010s latency).
+PORT      STATE    SERVICE
+58000/tcp closed   unknown
+59000/tcp closed   unknown
+Nmap done: 1 IP address (1 host up) scanned
+EOF
+}
+
 write_down_txt() {
     cat <<EOF
 Starting Nmap fake for $target
@@ -67,23 +69,8 @@ Nmap done: scanning 1 IP address
 EOF
 }
 
-# Always write the text artifact (discovery greps it for "Host is up").
-if [[ "$XML_FOR_TARGET" == "down" ]]; then
-    txt="$(write_down_txt)"
-else
-    txt="$(write_up_txt)"
-fi
-
-if [[ -n "$out_txt" ]]; then
-    printf '%s\n' "$txt" > "$out_txt"
-fi
-
-# XML is only meaningful for enumeration-style scans.
-if [[ -n "$out_xml" && "$XML_FOR_TARGET" != "down" ]]; then
-    if [[ -f "$XML_FOR_TARGET" ]]; then
-        cp "$XML_FOR_TARGET" "$out_xml"
-    else
-        cat > "$out_xml" <<EOF
+write_up_xml() {
+    cat <<EOF
 <?xml version="1.0"?>
 <nmaprun scanner="nmap" version="fake" start="1715000000" xmloutputversion="1.04">
 <scaninfo type="syn" protocol="tcp"/>
@@ -108,6 +95,78 @@ if [[ -n "$out_xml" && "$XML_FOR_TARGET" != "down" ]]; then
 </runstats>
 </nmaprun>
 EOF
+}
+
+write_noopen_xml() {
+    cat <<EOF
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" version="fake" start="1715000000" xmloutputversion="1.04">
+<scaninfo type="syn" protocol="tcp"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1715000000" endtime="1715000100">
+<status state="up" reason="syn-ack"/>
+<address addr="$target" addrtype="ipv4"/>
+<hostnames><hostname name="noopen" type="PTR"/></hostnames>
+<ports>
+<port protocol="tcp" portid="58000"><state state="closed" reason="reset"/></port>
+<port protocol="tcp" portid="59000"><state state="closed" reason="reset"/></port>
+</ports>
+</host>
+<runstats>
+<finished time="1715000100" timestr="Mon" exit="success"/>
+<hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>
+EOF
+}
+
+if [[ "${FAKE_NMAP_FAIL:-}" == 1 ]]; then
+    echo "nmap: failed to open output file /proc/self/fd/1 (simulated)" >&2
+    exit 1
+fi
+
+if [[ "${FAKE_NMAP_NO_OPEN:-}" == 1 ]]; then
+    txt="$(write_noopen_txt)"
+    if [[ -n "$out_txt" ]]; then
+        printf '%s\n' "$txt" > "$out_txt"
+    fi
+    if [[ -n "$out_xml" ]]; then
+        write_noopen_xml > "$out_xml"
+    fi
+    exit 0
+fi
+
+XML_FOR_TARGET=""
+if [[ "${FAKE_NMAP_UP:-}" == 0 || "${FAKE_NMAP_UP:-}" == "0" ]]; then
+    XML_FOR_TARGET="down"
+elif [[ "${FAKE_NMAP_UP:-}" == 1 || "${FAKE_NMAP_UP:-}" == "1" ]]; then
+    XML_FOR_TARGET="up"
+elif [[ -n "${FAKE_NMAP_UP:-}" && -f "${FAKE_NMAP_UP}" ]]; then
+    XML_FOR_TARGET="$FAKE_NMAP_UP"
+else
+    XML_FOR_TARGET="down"
+fi
+
+if [[ "$XML_FOR_TARGET" == "down" ]]; then
+    txt="$(write_down_txt)"
+else
+    txt="$(write_up_txt)"
+fi
+
+if [[ -n "$out_txt" ]]; then
+    printf '%s\n' "$txt" > "$out_txt"
+fi
+
+# XML is only meaningful for enumeration-style scans. FAKE_NMAP_CORRUPT forces
+# intentionally-invalid XML so malformed/truncated artifact handling is tested.
+if [[ -n "$out_xml" && "$XML_FOR_TARGET" != "down" ]]; then
+    if [[ "${FAKE_NMAP_CORRUPT:-}" == 1 ]]; then
+        printf '<?xml version="1.0"?>\n<nmaprun>\n<ports>\n  <port protocol="tcp" portid="21">\n' > "$out_xml"
+    elif [[ -f "$XML_FOR_TARGET" ]]; then
+        cp "$XML_FOR_TARGET" "$out_xml"
+    else
+        write_up_xml > "$out_xml"
     fi
 fi
 

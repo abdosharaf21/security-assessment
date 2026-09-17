@@ -126,7 +126,7 @@ assert_file() {
 assert_contains() {
     local desc="$1" needle="$2" path="$3"
     note "$desc"
-    if [[ -f "$path" ]] && grep -q --fixed-strings "$needle" "$path"; then
+    if [[ -f "$path" ]] && grep -q -F -- "$needle" "$path"; then
         pass
     else
         fail "needle not found in $path: <$needle>" "$desc"
@@ -189,7 +189,7 @@ assert_xml_ok() {
 
 t01_syntax() {
     local f
-    for f in lib/common.sh lib/assessment.sh scanner.sh modules/*.sh; do
+    for f in lib/common.sh lib/assessment.sh lib/scope.sh lib/scope_worker.sh scanner.sh modules/*.sh modules/service_handlers/*.sh; do
         note "t01 bash -n $f"
         if bash -n "$f" >/dev/null 2>&1; then pass; else fail "syntax error in $f" "$f"; fi
     done
@@ -197,7 +197,7 @@ t01_syntax() {
 
 t02_executable() {
     local f
-    for f in scanner.sh modules/*.sh tests/fakes/*; do
+    for f in scanner.sh modules/*.sh modules/service_handlers/*.sh tests/fakes/*; do
         note "t02 executable $f"
         if [[ -x "$f" ]]; then pass; else fail "not executable: $f" "$f"; fi
     done
@@ -415,10 +415,23 @@ t17_report_full() {
 }
 
 t18_report_partial() {
+    # Hermetic partial assessment: run Phase 2 against the loopback target (fake
+    # nmap, offline) into a scratch worktree, then confirm the report marks the
+    # unexecuted phases honestly. No dependency on leftover run artifacts.
+    local wrk="$RUN/t18_work"
+    local enum_dir="$wrk/enumeration"
+    local report_dir="$wrk/reports"
+    mkdir -p "$enum_dir" "$report_dir"
+    run_expect "t18 phase2 loopback (fake) rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$enum_dir" FAKE_NMAP_UP=1 \
+            "$MODULES/enumeration.sh" "$TARGET_LOOP"
     run_expect "t18 report partial (loopback enum only) rc=0" 0 \
-        env PATH="$FAKES:$BASE_PATH" "$MODULES/report.sh" "$TARGET_LOOP"
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$enum_dir" OUTPUT_REPORTS="$report_dir" \
+            "$MODULES/report.sh" "$TARGET_LOOP"
     local f
-    f="$(ls -1dt "$ROOT"/reports/${TARGET_LOOP}_*.md 2>/dev/null | head -n1)"
+    f="$(ls -1dt ${report_dir}/${TARGET_LOOP}_*.md 2>/dev/null | head -n1)"
     assert_file "t18 markdown report" "$f"
     assert_contains "t18 open ports section" "## 4. Open Ports" "$f"
     assert_contains "t18 not-performed honesty" "not performed" "$f"
@@ -814,6 +827,226 @@ t40_corrupt_manifest() {
 }
 
 # ------------------------------------------------------------------
+# 12. Enumeration V2 - multi-stage pipeline (offline, fake nmap)
+# ------------------------------------------------------------------
+
+# enums_at <base> <ts-marker> - return newest enumeration base prefix dir path
+enum_v2_txt() {
+    # newest <safe>_* .txt artifact (stage-2) for the target in $1 dir
+    local dir="$1" safe="$2"
+    ls -1dt "${dir}/${safe}_"*.txt 2>/dev/null | head -n1
+}
+
+t41_enum_v2_normal() {
+    local s="$RUN/t41"
+    mkdir -p "$s/enum"
+    run_expect "t41 enumeration v2 rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+
+    local st tsv x t
+    st="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.status.txt 2>/dev/null | head -n1)"
+    assert_file "t41 status file" "$st"
+    assert_contains "t41 status completed" "status=completed" "$st"
+
+    tsv="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.services.tsv 2>/dev/null | head -n1)"
+    assert_file "t41 services tsv" "$tsv"
+    assert_count "t41 exactly one open service" "$tsv" 1
+
+    x="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.xml 2>/dev/null | grep -v '\.ports\.xml$' | head -n1)"
+    assert_xml_ok "t41 stage-2 XML parses (python ET)" "$x"
+
+    if [[ -f "$tsv" ]] && grep -q "vsftpd" "$tsv" && grep -q "21" "$tsv"; then
+        note "t41 services.tsv carries service/product data"
+        pass
+    else
+        fail "services.tsv missing service/product data" "t41 tsv data"
+    fi
+
+    local htsv
+    htsv="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.stage3/handlers.tsv 2>/dev/null | head -n1)"
+    assert_file "t41 stage-3 handlers audit" "$htsv"
+    assert_contains "t41 banner handler ran ok" "banner_store_handler" "$htsv"
+}
+
+t42_enum_v2_no_open() {
+    local s="$RUN/t42"
+    mkdir -p "$s/enum"
+    run_expect "t42 reachable no open ports rc=3" 3 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_NO_OPEN=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    local st
+    st="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.status.txt 2>/dev/null | head -n1)"
+    assert_file "t42 status file written" "$st"
+    assert_contains "t42 status completed-no-open" "status=completed-no-open-ports" "$st"
+    note "t42 no stage-2 artifact created"
+    if ! ls -1 "$s/enum/${TARGET_MS2}_"*.xml 2>/dev/null | grep -qEv '\.ports\.xml$'; then
+        pass
+    else
+        fail "stage-2 XML unexpectedly written" "t42 stage2"
+    fi
+}
+
+t43_enum_v2_malformed_xml() {
+    local s="$RUN/t43"
+    mkdir -p "$s/enum"
+    run_expect "t43 malformed XML rc=0 (still completes off text)" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 FAKE_NMAP_CORRUPT=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    local st diag tsv
+    st="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.status.txt 2>/dev/null | head -n1)"
+    assert_file "t43 status file written" "$st"
+    assert_contains "t43 status partial (honest)" "status=partial" "$st"
+    assert_contains "t43 parse fell back to text" "stage2_parse=txt-fallback" "$st"
+    tsv="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.services.tsv 2>/dev/null | head -n1)"
+    assert_file "t43 services from text fallback" "$tsv"
+    assert_count "t43 services parsed from text" "$tsv" 1
+    diag="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.diagnostics.log 2>/dev/null | head -n1)"
+    assert_file "t43 diagnostics log not silent" "$diag"
+}
+
+t44_enum_v2_nmap_failure() {
+    local s="$RUN/t44"
+    mkdir -p "$s/enum"
+    run_expect "t44 nmap failure rc=1" 1 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_FAIL=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    local st diag
+    st="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.status.txt 2>/dev/null | head -n1)"
+    assert_file "t44 status file written" "$st"
+    assert_contains "t44 status error (honest)" "status=error" "$st"
+    diag="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.diagnostics.log 2>/dev/null | head -n1)"
+    assert_file "t44 diagnostics log not silent" "$diag"
+    assert_contains "t44 nmap exit recorded" "exited code 1" "$diag"
+}
+
+t45_enum_v2_invalid_target() {
+    run_expect "t45 invalid target rc=1" 1 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            "$MODULES/enumeration.sh" "-oX"
+}
+
+t46_enum_v2_missing_nmap() {
+    local s="$RUN/t46"
+    mkdir -p "$s/bin" "$s/enum"
+    # A tool binder without nmap (coreutils symlinked only).
+    local tool
+    for tool in bash env date dirname echo mkdir grep sed awk python3 timeout basename wc cut tail tr head; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            ln -sf "$(command -v "$tool")" "$s/bin/$tool"
+        fi
+    done
+    run_expect "t46 missing nmap rc=1" 1 \
+        env PATH="$s/bin" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    local diag
+    diag="$(ls -1dt "$s/enum/${TARGET_MS2}_"*.diagnostics.log 2>/dev/null | head -n1)"
+    assert_file "t46 diagnostics log written" "$diag"
+    assert_contains "t46 nmap missing noted" "nmap is not installed" "$diag"
+}
+
+t47_enum_v2_port_modes() {
+    local s="$RUN/t47"
+    mkdir -p "$s/enum"
+    local log_d="$s/nmap_default.log" log_a="$s/nmap_all.log" log_c="$s/nmap_custom.log"
+    rm -f "$log_d" "$log_a" "$log_c"
+
+    run_expect "t47 default mode top-100 rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 FAKE_NMAP_LOG="$log_d" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    assert_contains "t47 stage1 uses --top-ports 100" "--top-ports 100" "$log_d"
+    ( grep -q -- "--script=default" "$log_d" && grep -q -- "-p 21" "$log_d" ) && {
+        note "t47 stage2 targeted only discovered ports"
+        pass
+    } || {
+        fail "stage2 not targeted at discovered ports" "t47 stage2"
+    }
+
+    run_expect "t47 all-ports mode rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" ENUM_PORT_MODE=all FAKE_NMAP_UP=1 FAKE_NMAP_LOG="$log_a" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    note "t47 all mode stage1 = -p- (not top-ports)"
+    if ( grep -q -- "-p-" "$log_a" && ! grep -q -- "--top-ports" "$log_a" ); then
+        pass
+    else
+        fail "all mode did not use -p-" "t47 all"
+    fi
+
+    run_expect "t47 custom NMAP_PORTS honored rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" NMAP_PORTS="-p 22-1024" FAKE_NMAP_UP=1 \
+            FAKE_NMAP_LOG="$log_c" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    assert_contains "t47 custom mode uses -p 22-1024" "-p 22-1024" "$log_c"
+}
+
+t48_enum_v2_scripts_safety() {
+    local s="$RUN/t48"
+    mkdir -p "$s/enum"
+    local log="$s/nmap_argv.log"
+    rm -f "$log"
+
+    run_expect "t48 default script=default rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 FAKE_NMAP_LOG="$log" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    note "t48 default NSE = default (no vuln by default)"
+    if ( grep -q -- "--script=default" "$log" && ! grep -q -- "--script=.*vuln" "$log" ); then
+        pass
+    else
+        fail "default NSE scripts not safe" "t48 default"
+    fi
+
+    run_expect "t48 opt-in NMAP_SCRIPTS=vuln honored rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" NMAP_SCRIPTS="vuln" FAKE_NMAP_UP=1 \
+            FAKE_NMAP_LOG="$log" \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    assert_contains "t48 explicit vuln allowed (opt-in)" "--script=vuln" "$log"
+}
+
+t49_enum_full_scan_safety() {
+    local s="$RUN/t49"
+    mkdir -p "$s"
+    local log="$s/nmap_argv.log"
+    # scan --full with an EXPRESSLY DENIED exploitation approval. Sploit still
+    # available on disk via the fakes; without human approval nothing may run.
+    run_expect "t49 full scan denied exploit rc=5" 5 \
+        ux "$s" env FAKE_NMAP_LOG="$log" timeout 160 \
+            bash -c 'printf "1\nn\n" | "$0" scan 203.0.113.7 --full' "$ROOT/scanner.sh"
+
+    local aid st
+    aid="$(ls -1dt "$s/assessments"/assessment_* 2>/dev/null | head -n1 | xargs basename)"
+    st="$s/assessments/$aid/manifest.json"
+    # Manifest records the cancelled phase honestly; never a fabricated session.
+    manifest_status "t49 manifest status failed (not completed)" "$st" failed
+    manifest_no_phase "t49 exploitation NOT completed" "$st" exploitation
+    note "t49 denial left no exploitation session artifacts"
+    if [[ -z "$(ls -A "$s/assessments/$aid/exploitation" 2>/dev/null)" ]]; then
+        pass
+    else
+        fail "exploitation artifacts created despite denial" "t49 autoexploit"
+    fi
+    local r
+    r="$(ls -1dt "$s/assessments/$aid/report/"*_*.md 2>/dev/null | head -n1)"
+    assert_file "t49 honest report still written" "$r"
+    assert_contains "t49 report says exploitation not performed" "not performed" "$r"
+    note "t49 full scan default NSE = default (no vuln)"
+    if ( grep -q -- "--script=default" "$log" && ! grep -q -- "--script=.*vuln" "$log" ); then
+        pass
+    else
+        fail "full scan invoked unsafe NSE by default" "t49 nse"
+    fi
+}
+
+# ------------------------------------------------------------------
 # main / collection
 # ------------------------------------------------------------------
 
@@ -864,6 +1097,16 @@ t37_scan_quick_resume
 t38_status
 t39_preflight
 t40_corrupt_manifest
+
+t41_enum_v2_normal
+t42_enum_v2_no_open
+t43_enum_v2_malformed_xml
+t44_enum_v2_nmap_failure
+t45_enum_v2_invalid_target
+t46_enum_v2_missing_nmap
+t47_enum_v2_port_modes
+t48_enum_v2_scripts_safety
+t49_enum_full_scan_safety
 
 if [[ "$RUN_NETWORK" == 1 ]]; then
     echo

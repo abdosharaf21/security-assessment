@@ -95,8 +95,23 @@ sat_apply_defaults() {
     NMAP_TIMING="${NMAP_TIMING:--T4}"
     NMAP_PORTS="${NMAP_PORTS:--p-}"
     NMAP_SERVICE_DETECTION="${NMAP_SERVICE_DETECTION:--sV}"
-    NMAP_SCRIPTS="${NMAP_SCRIPTS:-default,vuln}"
+    # Safe default: the 'default' NSE category only. No 'vuln' category
+    # and no exploitation is ever run automatically. Vulnerability
+    # detection stays in Phase 3 (SearchSploit) - a separate concern.
+    NMAP_SCRIPTS="${NMAP_SCRIPTS:-default}"
     NMAP_OUTPUT_FORMAT="${NMAP_OUTPUT_FORMAT:-xml}"
+
+    # Phase 2 (Enumeration V2) - multi-stage port selection
+    #   ENUM_PORT_MODE=top    top-N TCP ports (N = ENUM_TOP_PORTS, default 100)
+    #   ENUM_PORT_MODE=all    all 65535 TCP ports (-p-)
+    #   ENUM_PORT_MODE=custom NMAP_PORTS (-p <list/range>)
+    # An explicitly exported NMAP_PORTS is always honored as 'custom' for
+    # backward compatibility with existing callers.
+    ENUM_PORT_MODE="${ENUM_PORT_MODE:-top}"
+    ENUM_TOP_PORTS="${ENUM_TOP_PORTS:-100}"
+    ENUM_DISCOVERY_TIMEOUT="${ENUM_DISCOVERY_TIMEOUT:-300}"
+    ENUM_SERVICE_TIMEOUT="${ENUM_SERVICE_TIMEOUT:-600}"
+    ENUM_HANDLER_TIMEOUT="${ENUM_HANDLER_TIMEOUT:-30}"
 
     SEARCHSPLOIT_ENABLED="${SEARCHSPLOIT_ENABLED:-true}"
     METASPLOIT_ENABLED="${METASPLOIT_ENABLED:-true}"
