@@ -12,6 +12,14 @@
 
 set -u
 
+# FAKE_SEARCHSPLOIT_FLAG_MODE controls which colour option this build accepts,
+# so the module's capability detection can be exercised deterministically:
+#   permissive (default) - accepts any flag (back-compat for existing tests)
+#   modern               - accepts --disable-colour, rejects --colour=0
+#   legacy               - accepts --colour=0, rejects --disable-colour
+#   plain                - accepts neither; advertises no colour option
+FLAG_MODE="${FAKE_SEARCHSPLOIT_FLAG_MODE:-permissive}"
+
 if [[ "${FAKE_MODE:-}" == "garbage" ]]; then
     cat <<'GARBAGE'
 =======================================================================
@@ -23,6 +31,41 @@ this line has no pipe so it is ignored
 GARBAGE
     exit 1
 fi
+
+# Simulate a failed invocation whose output would look like a candidate row if
+# it were naively parsed. Exercises the parser's usage-dump guard.
+if [[ "${FAKE_SEARCHSPLOIT_USAGE_ERR:-}" == "1" ]]; then
+    cat <<'USAGE'
+illegal option -- -
+Usage: searchsploit [options] term1 [term2] ... [termN]
+  searchsploit -x docs | /usr/share/exploitdb/exploits/linux/remote/99999
+USAGE
+    exit 2
+fi
+
+# Help output drives capability detection. Real searchsploit exits non-zero on
+# --help, so keep that behaviour to prove detection ignores the exit code.
+for a in "$@"; do
+    case "$a" in
+        --help|-h)
+            case "$FLAG_MODE" in
+                modern) echo "  --disable-colour   Disable colour highlighting in search results" ;;
+                legacy) echo "  --colour=0         Disable colour highlighting (legacy syntax)" ;;
+                *) : ;;
+            esac
+            exit 2
+            ;;
+    esac
+done
+
+# Reject options the selected build does not support, exactly like the real CLI.
+for a in "$@"; do
+    case "$FLAG_MODE:$a" in
+        modern:--colour=0) echo "illegal option -- -" >&2; exit 2 ;;
+        legacy:--disable-colour|legacy:--no-colour) echo "illegal option -- -" >&2; exit 2 ;;
+        plain:--disable-colour|plain:--no-colour|plain:--colour=0) echo "illegal option -- -" >&2; exit 2 ;;
+    esac
+done
 
 MODE=raw
 TERM=""

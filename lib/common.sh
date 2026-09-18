@@ -187,6 +187,85 @@ sat_latest_dir_with() {
 }
 
 # ---------------------------------------------------------------
+# Enumeration V2 artifact selection
+# ---------------------------------------------------------------
+#
+# Enumeration V2 writes two XML/text artifact families for one run:
+#   base.ports.xml / base.ports.txt   - Stage 1 port discovery (no versions)
+#   base.xml       / base.txt         - Stage 2 targeted service enumeration
+# and records the authoritative Stage-2 names in base.status.txt as
+#   enumeration_xml=<basename>  /  enumeration_txt=<basename>
+#
+# Selecting "the enumeration artifact" by filename glob is unsafe: the
+# Stage-1 ".ports.xml" name sorts before the Stage-2 ".xml" name, and a
+# partially-quoted glob can even be pre-expanded by the shell. These helpers
+# therefore read the run's recorded state (status.txt) and only fall back to
+# an mtime-ordered scan for status-less legacy artifacts. The Stage-1
+# ".ports.*" family is never returned.
+
+sat_enum_service_xml() {
+    # sat_enum_service_xml <enum_dir> <safe_target>
+    # Prints the absolute path of the newest run's Stage-2 service XML, or
+    # nothing when no Stage-2 XML exists.
+    local base="${1:-}" prefix="${2:-}" s f val sts best="" best_ts=""
+    [[ -n "$base" && -n "$prefix" && -d "$base" ]] || { printf ''; return 0; }
+
+    for s in "$base/${prefix}_"*.status.txt; do
+        [[ -f "$s" ]] || continue
+        val="$(sed -n 's/^enumeration_xml=//p' "$s" | head -n1)"
+        [[ -n "$val" ]] || continue
+        case "$val" in *.ports.xml) continue ;; esac
+        [[ -f "$base/$val" ]] || continue
+        sts="$(sed -n 's/^timestamp=//p' "$s" | head -n1)"
+        [[ -n "$sts" ]] || sts="$(basename "$s")"
+        if [[ -z "$best_ts" || "$sts" > "$best_ts" ]]; then
+            best="$base/$val"
+            best_ts="$sts"
+        fi
+    done
+    if [[ -z "$best" ]]; then
+        # Backward compatibility: status-less/legacy runs. Pick the newest
+        # non-Stage-1 XML by modification time (never lexical order).
+        for f in "$base/${prefix}_"*.xml; do
+            [[ -f "$f" ]] || continue
+            case "$f" in *.ports.xml) continue ;; esac
+            if [[ -z "$best" || "$f" -nt "$best" ]]; then
+                best="$f"
+            fi
+        done
+    fi
+    printf '%s' "$best"
+}
+
+sat_enum_service_txt() {
+    # sat_enum_service_txt <enum_dir> <safe_target>
+    # Prints the absolute path of the newest run's Stage-2 enumeration text,
+    # or nothing when it does not exist.
+    local base="${1:-}" prefix="${2:-}" s val sts best="" best_ts="" xml
+    [[ -n "$base" && -n "$prefix" && -d "$base" ]] || { printf ''; return 0; }
+
+    for s in "$base/${prefix}_"*.status.txt; do
+        [[ -f "$s" ]] || continue
+        val="$(sed -n 's/^enumeration_txt=//p' "$s" | head -n1)"
+        [[ -n "$val" ]] || continue
+        [[ -f "$base/$val" ]] || continue
+        sts="$(sed -n 's/^timestamp=//p' "$s" | head -n1)"
+        [[ -n "$sts" ]] || sts="$(basename "$s")"
+        if [[ -z "$best_ts" || "$sts" > "$best_ts" ]]; then
+            best="$base/$val"
+            best_ts="$sts"
+        fi
+    done
+    if [[ -z "$best" ]]; then
+        xml="$(sat_enum_service_xml "$base" "$prefix")"
+        if [[ -n "$xml" && -f "${xml%.xml}.txt" ]]; then
+            best="${xml%.xml}.txt"
+        fi
+    fi
+    printf '%s' "$best"
+}
+
+# ---------------------------------------------------------------
 # Target validation
 # ---------------------------------------------------------------
 

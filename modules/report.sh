@@ -62,9 +62,9 @@ fi
 # Locate the latest per-phase artifacts for the target
 # ---------------------------------------------------------------
 
-DISCOVERY_FILE="$(sat_latest_file "$OUTPUT_NMAP/${SAFE_TARGET}_"*.txt)"
-ENUM_TXT="$(sat_latest_file "$OUTPUT_ENUM/${SAFE_TARGET}_"*.txt)"
-ENUM_XML="$(sat_latest_file "$OUTPUT_ENUM/${SAFE_TARGET}_"*.xml)"
+DISCOVERY_FILE="$(sat_latest_file "$OUTPUT_NMAP/${SAFE_TARGET}_*.txt")"
+ENUM_TXT="$(sat_enum_service_txt "$OUTPUT_ENUM" "$SAFE_TARGET")"
+ENUM_XML="$(sat_enum_service_xml "$OUTPUT_ENUM" "$SAFE_TARGET")"
 
 VULN_RESEARCH_DIR=""
 CORRELATION_DIR=""

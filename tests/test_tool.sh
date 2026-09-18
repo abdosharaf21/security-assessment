@@ -1047,6 +1047,237 @@ t49_enum_full_scan_safety() {
 }
 
 # ------------------------------------------------------------------
+# 10. Regressions: enum artifact selection + searchsploit flag compat
+# ------------------------------------------------------------------
+
+# Invoke a lib/common.sh helper in a clean subshell (harness is bash).
+common_fn() {
+    local fn="$1"; shift
+    bash -c 'source "$1"; shift; "$@"' _ "$ROOT/lib/common.sh" "$fn" "$@"
+}
+
+t50_enum_artifact_both() {
+    local s="$RUN/t50"
+    mkdir -p "$s/enum"
+    run_expect "t50 enumeration produces both XML families rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    local ports stage2 sel txtsel
+    ports="$(ls -1 "$s/enum/${TARGET_MS2}_"*.ports.xml 2>/dev/null | head -n1)"
+    stage2="$(ls -1t "$s/enum/${TARGET_MS2}_"*.xml 2>/dev/null | grep -v '\.ports\.xml$' | head -n1)"
+    assert_file "t50 stage-1 ports XML exists" "$ports"
+    assert_file "t50 stage-2 service XML exists" "$stage2"
+    sel="$(common_fn sat_enum_service_xml "$s/enum" "$TARGET_MS2")"
+    note "t50 selects stage-2 XML (not stage-1 ports XML)"
+    if [[ "$sel" == "$stage2" && "$sel" != "$ports" ]]; then pass; else fail "selected '$sel' (wanted '$stage2')" "t50 xml"; fi
+    txtsel="$(common_fn sat_enum_service_txt "$s/enum" "$TARGET_MS2")"
+    note "t50 selects stage-2 txt sibling"
+    if [[ "$txtsel" == "${stage2%.xml}.txt" ]]; then pass; else fail "selected '$txtsel'" "t50 txt"; fi
+}
+
+t51_enum_artifact_stage1_only() {
+    local s="$RUN/t51"
+    mkdir -p "$s/enum"
+    : > "$s/enum/${TARGET_MS2}_20990101_000000000000000.ports.xml"
+    cat > "$s/enum/${TARGET_MS2}_20990101_000000000000000.status.txt" <<EOF
+status=partial
+target=$TARGET_MS2
+timestamp=20990101_000000000000000
+ports_xml=${TARGET_MS2}_20990101_000000000000000.ports.xml
+EOF
+    local sel txtsel
+    sel="$(common_fn sat_enum_service_xml "$s/enum" "$TARGET_MS2")"
+    note "t51 stage-1-only run yields no stage-2 XML"
+    if [[ -z "$sel" ]]; then pass; else fail "unexpected selection '$sel'" "t51 xml"; fi
+    txtsel="$(common_fn sat_enum_service_txt "$s/enum" "$TARGET_MS2")"
+    note "t51 stage-1-only run yields no stage-2 txt"
+    if [[ -z "$txtsel" ]]; then pass; else fail "unexpected selection '$txtsel'" "t51 txt"; fi
+}
+
+t52_enum_artifact_partial_missing() {
+    local s="$RUN/t52"
+    mkdir -p "$s/enum"
+    : > "$s/enum/${TARGET_MS2}_20990101_000000000000000.ports.xml"
+    cat > "$s/enum/${TARGET_MS2}_20990101_000000000000000.status.txt" <<EOF
+status=partial
+timestamp=20990101_000000000000000
+ports_xml=${TARGET_MS2}_20990101_000000000000000.ports.xml
+enumeration_xml=${TARGET_MS2}_20990101_000000000000000.xml
+enumeration_txt=${TARGET_MS2}_20990101_000000000000000.txt
+EOF
+    local sel
+    sel="$(common_fn sat_enum_service_xml "$s/enum" "$TARGET_MS2")"
+    note "t52 status pointing at a missing stage-2 XML is not selected"
+    if [[ -z "$sel" ]]; then pass; else fail "unexpected selection '$sel'" "t52 xml"; fi
+}
+
+t53_enum_artifact_multiple_historical() {
+    local s="$RUN/t53"
+    mkdir -p "$s/enum"
+    local old="${TARGET_MS2}_20200101_000000000000000"
+    local new="${TARGET_MS2}_20200102_000000000000000"
+    printf '<?xml version="1.0"?>\n<nmaprun><host><address addr="%s" addrtype="ipv4"/></host></nmaprun>\n' "$TARGET_MS2" > "$s/enum/$old.xml"
+    printf '<?xml version="1.0"?>\n<nmaprun><host><address addr="%s" addrtype="ipv4"/></host></nmaprun>\n' "$TARGET_MS2" > "$s/enum/$new.xml"
+    : > "$s/enum/$old.ports.xml"
+    : > "$s/enum/$new.ports.xml"
+    printf 'stage2 old\n' > "$s/enum/$old.txt"
+    printf 'stage2 new\n' > "$s/enum/$new.txt"
+    cat > "$s/enum/$old.status.txt" <<EOF
+status=completed
+timestamp=20200101_000000000000000
+enumeration_xml=$old.xml
+enumeration_txt=$old.txt
+ports_xml=$old.ports.xml
+EOF
+    cat > "$s/enum/$new.status.txt" <<EOF
+status=completed
+timestamp=20200102_000000000000000
+enumeration_xml=$new.xml
+enumeration_txt=$new.txt
+ports_xml=$new.ports.xml
+EOF
+    # mtimes deliberately reversed: recorded timestamps must win, not mtime/glob order.
+    touch -d '2020-01-01 00:00:00' "$s/enum/$new.xml" "$s/enum/$new.txt" "$s/enum/$new.status.txt" "$s/enum/$new.ports.xml"
+    touch -d '2021-01-01 00:00:00' "$s/enum/$old.xml" "$s/enum/$old.txt" "$s/enum/$old.status.txt" "$s/enum/$old.ports.xml"
+    local sel txtsel
+    sel="$(common_fn sat_enum_service_xml "$s/enum" "$TARGET_MS2")"
+    note "t53 newest recorded run wins (not mtime/lexical)"
+    if [[ "$sel" == "$s/enum/$new.xml" ]]; then pass; else fail "selected '$sel'" "t53 xml"; fi
+    txtsel="$(common_fn sat_enum_service_txt "$s/enum" "$TARGET_MS2")"
+    note "t53 newest recorded stage-2 txt wins"
+    if [[ "$txtsel" == "$s/enum/$new.txt" ]]; then pass; else fail "selected '$txtsel'" "t53 txt"; fi
+}
+
+t54_enum_artifact_legacy_no_status() {
+    local s="$RUN/t54"
+    mkdir -p "$s/enum"
+    local old="${TARGET_MS2}_20200101_000000000000000"
+    local new="${TARGET_MS2}_20200102_000000000000000"
+    : > "$s/enum/$old.xml"
+    : > "$s/enum/$new.ports.xml"
+    touch -d '2020-01-01 00:00:00' "$s/enum/$old.xml"
+    touch -d '2020-01-02 00:00:00' "$s/enum/$new.ports.xml"
+    local sel
+    sel="$(common_fn sat_enum_service_xml "$s/enum" "$TARGET_MS2")"
+    note "t54 legacy status-less fallback ignores stage-1 ports XML"
+    if [[ "$sel" == "$s/enum/$old.xml" ]]; then pass; else fail "selected '$sel'" "t54 xml"; fi
+}
+
+t55_vuln_autoselect_stage2() {
+    local s="$RUN/t55"
+    mkdir -p "$s/enum" "$s/vuln"
+    run_expect "t55 enumeration fixture rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_ENUM="$s/enum" FAKE_NMAP_UP=1 \
+            "$MODULES/enumeration.sh" "$TARGET_MS2"
+    # No explicit XML argument: the module must select the stage-2 file itself.
+    run_expect "t55 vuln auto-selects stage-2 XML rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            FAKE_SEARCHSPLOIT_FLAG_MODE=modern \
+            OUTPUT_ENUM="$s/enum" OUTPUT_VULN="$s/vuln" \
+            "$MODULES/vulnerability.sh" "$TARGET_MS2"
+    local d
+    d="$(latest_dir "$s/vuln/${TARGET_MS2}_")"
+    assert_contains "t55 candidate vsftpd found" "17491" "$d/exploitdb_candidates.tsv"
+    note "t55 vulnerability phase did not use a stage-1 ports XML"
+    if grep -q 'enumeration_xml=.*\.ports\.xml' "$d/status.txt"; then
+        fail "vulnerability phase used stage-1 ports XML" "t55 xml"
+    else
+        pass
+    fi
+}
+
+t56_report_uses_stage2_text() {
+    local s="$RUN/t56" safe="$TARGET_MS2"
+    local base="${safe}_20990101_000000000000000"
+    mkdir -p "$s/enum" "$s/reports" "$s/nmap" "$s/vuln" "$s/exploit" "$s/evidence"
+    # Stage-1 text carries a decoy version; stage-2 carries the real one.
+    printf '21/tcp open  ftp     vsftpd 9.9.9\n' > "$s/enum/$base.ports.nmap.txt"
+    printf '21/tcp open  ftp     vsftpd 9.9.9\n' > "$s/enum/$base.ports.txt"
+    printf '21/tcp open  ftp     vsftpd 2.3.4\n' > "$s/enum/$base.txt"
+    printf '<?xml version="1.0"?>\n<nmaprun><host><address addr="%s" addrtype="ipv4"/><hostnames/><ports/></host></nmaprun>\n' "$safe" > "$s/enum/$base.xml"
+    : > "$s/enum/$base.ports.xml"
+    cat > "$s/enum/$base.status.txt" <<EOF
+status=completed
+target=$safe
+timestamp=20990101_000000000000000
+ports_xml=$base.ports.xml
+enumeration_xml=$base.xml
+enumeration_txt=$base.txt
+EOF
+    run_expect "t56 report against stage-2 artifacts rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            OUTPUT_NMAP="$s/nmap" OUTPUT_ENUM="$s/enum" OUTPUT_VULN="$s/vuln" \
+            OUTPUT_EXPLOIT="$s/exploit" OUTPUT_EVIDENCE="$s/evidence" \
+            OUTPUT_REPORTS="$s/reports" \
+            "$MODULES/report.sh" "$safe"
+    local f
+    f="$(ls -1dt "$s/reports/${safe}_"*.md 2>/dev/null | head -n1)"
+    assert_file "t56 markdown report written" "$f"
+    assert_contains "t56 report uses stage-2 version" "vsftpd 2.3.4" "$f"
+    assert_not_contains "t56 report ignores stage-1 decoy version" "9.9.9" "$f"
+}
+
+t57_searchsploit_colour_modern() {
+    local s="$RUN/t57"
+    mkdir -p "$s/vuln"
+    run_expect "t57 modern searchsploit (--disable-colour) rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            FAKE_SEARCHSPLOIT_FLAG_MODE=modern OUTPUT_VULN="$s/vuln" \
+            "$MODULES/vulnerability.sh" "$TARGET_MS2" "$MS2_XML"
+    local d
+    d="$(latest_dir "$s/vuln/${TARGET_MS2}_")"
+    assert_contains "t57 candidates=3" "candidates=3" "$d/status.txt"
+    assert_contains "t57 candidate 17491" "17491" "$d/exploitdb_candidates.tsv"
+    assert_contains "t57 candidate 16320" "16320" "$d/exploitdb_candidates.tsv"
+    assert_not_contains "t57 no illegal-option dump" "illegal option" "$d/searchsploit_raw/combined_raw.txt"
+}
+
+t58_searchsploit_colour_legacy() {
+    local s="$RUN/t58"
+    mkdir -p "$s/vuln"
+    run_expect "t58 legacy searchsploit (--colour=0) rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            FAKE_SEARCHSPLOIT_FLAG_MODE=legacy OUTPUT_VULN="$s/vuln" \
+            "$MODULES/vulnerability.sh" "$TARGET_MS2" "$MS2_XML"
+    local d
+    d="$(latest_dir "$s/vuln/${TARGET_MS2}_")"
+    assert_contains "t58 candidates=3" "candidates=3" "$d/status.txt"
+    assert_contains "t58 candidate 17491" "17491" "$d/exploitdb_candidates.tsv"
+    assert_not_contains "t58 no illegal-option dump" "illegal option" "$d/searchsploit_raw/combined_raw.txt"
+}
+
+t59_searchsploit_colour_plain() {
+    local s="$RUN/t59"
+    mkdir -p "$s/vuln"
+    run_expect "t59 searchsploit with no colour option rc=0" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            FAKE_SEARCHSPLOIT_FLAG_MODE=plain OUTPUT_VULN="$s/vuln" \
+            "$MODULES/vulnerability.sh" "$TARGET_MS2" "$MS2_XML"
+    local d
+    d="$(latest_dir "$s/vuln/${TARGET_MS2}_")"
+    assert_contains "t59 candidates=3" "candidates=3" "$d/status.txt"
+    assert_not_contains "t59 no illegal-option dump" "illegal option" "$d/searchsploit_raw/combined_raw.txt"
+}
+
+t60_searchsploit_failure_not_fabricated() {
+    local s="$RUN/t60"
+    mkdir -p "$s/vuln"
+    run_expect "t60 failing searchsploit rc=0 (honest, no fabrication)" 0 \
+        env PATH="$FAKES:$BASE_PATH" CONFIG_FILE="$FIXTURES/config.conf" \
+            FAKE_SEARCHSPLOIT_USAGE_ERR=1 OUTPUT_VULN="$s/vuln" \
+            "$MODULES/vulnerability.sh" "$TARGET_MS2" "$MS2_XML"
+    local d
+    d="$(latest_dir "$s/vuln/${TARGET_MS2}_")"
+    assert_contains "t60 status completed (honest)" "status=completed" "$d/status.txt"
+    assert_contains "t60 candidates=0" "candidates=0" "$d/status.txt"
+    assert_file "t60 candidates file header only" "$d/exploitdb_candidates.tsv"
+    assert_count "t60 no fabricated candidate rows" "$d/exploitdb_candidates.tsv" 0
+    assert_contains "t60 failure preserved in raw evidence" "illegal option" "$d/searchsploit_raw/combined_raw.txt"
+}
+
+# ------------------------------------------------------------------
 # main / collection
 # ------------------------------------------------------------------
 
@@ -1107,6 +1338,18 @@ t46_enum_v2_missing_nmap
 t47_enum_v2_port_modes
 t48_enum_v2_scripts_safety
 t49_enum_full_scan_safety
+
+t50_enum_artifact_both
+t51_enum_artifact_stage1_only
+t52_enum_artifact_partial_missing
+t53_enum_artifact_multiple_historical
+t54_enum_artifact_legacy_no_status
+t55_vuln_autoselect_stage2
+t56_report_uses_stage2_text
+t57_searchsploit_colour_modern
+t58_searchsploit_colour_legacy
+t59_searchsploit_colour_plain
+t60_searchsploit_failure_not_fabricated
 
 if [[ "$RUN_NETWORK" == 1 ]]; then
     echo
