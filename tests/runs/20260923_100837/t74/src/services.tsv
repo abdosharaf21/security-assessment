@@ -1,4 +1,0 @@
-index	ip	port	protocol	service	product	version	extrainfo
-1	203.0.113.74	21	tcp	ftp	vsftpd	2.3.4	
-2	203.0.113.74	139	tcp	netbios-ssn	Samba smbd	3.0.20-Debian	
-3	203.0.113.74	8009	tcp	ajp13	Apache Jserv	1.2	

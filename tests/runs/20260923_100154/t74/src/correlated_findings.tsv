@@ -1,4 +1,0 @@
-target	port	protocol	service	product	detected_version	exploit_title	edb_id	exploit_path	cve	platform	type	search_query	confidence	severity	severity_source	match_reason	match_type	risk_category	evidence_confidence	version_evidence
-203.0.113.74	21	tcp	ftp	vsftpd	2.3.4	vsftpd 2.3.4 - Backdoor Command Execution	17491	exploits/linux/remote/17491.rb		linux	remote	vsftpd 2.3.4	high	high	tool-assessment	exact	EXACT_VERSION_MATCH	high	high	exact
-203.0.113.74	139	tcp	netbios-ssn	Samba smbd	3.0.20-Debian	Samba 3.0.20 < 3.0.25rc3 - Username map script Command Execution	16320	exploits/multi/samba/16320.rb		linux	remote	samba 3.0.20	medium	medium	tool-assessment	range	VERSION_RANGE_MATCH	medium	medium	range
-203.0.113.74	8009	tcp	ajp13	Apache Jserv	1.2	Apache Jserv Remote Buffer Overflow	30004	exploits/multi/http/30004.rb		linux	remote	apache jserv	medium	medium	tool-assessment	strong	STRONG_PRODUCT_SERVICE_MATCH	medium	medium	strong
