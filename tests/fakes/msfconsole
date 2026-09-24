@@ -2,12 +2,29 @@
 #
 # FAKE msfconsole shim for automated tests only (never touches a real
 # Metasploit installation). Mimics the CLI surface the tool uses:
-#   msfconsole -q -r <resource_file>
+#   msfconsole -q -r <resource_file>          (stdin may be a live control pipe)
 #
-# Behavior driven by the resource file content:
-#   vsftpd_234_backdoor module -> prints a fake open session + sessions -C output
-#   samba usermap_script module -> prints an explicit "no session" message
-#   anything else              -> generic completion, no session
+# The fake mirrors the release-Metasploit behaviors the runner depends on:
+#   - "set PAYLOAD cmd/unix/interact"        -> rejected ("not valid")
+#   - "set ExitOnSession false"              -> "[!] Unknown datastore option" (unsupported)
+#   - "show options" (capability probe)      -> reports the module default payload
+#     and (optionally) "LHOST ... yes" as required
+#   - "exploit -j -z" launch                 -> opens a session (vsftpd) or not
+#     (usermap_script / hang / garbage), THEN STAYS ALIVE reading commands
+#     from stdin (like a real msfconsole sitting at its prompt) so the tool
+#     can collect evidence THROUGH THE SAME process before a clean exit
+#   - "sessions -c <cmd> -i <id>" (stdin)    -> prints evidence ONLY for the
+#     session THIS process actually created; any other id gets msf's own
+#     "specify -i" error (never fabricated)
+#   - "exit -y" (stdin)                      -> clean exit 0
+#
+# Behavior knobs (set via the environment, like the other shims):
+#   FAKE_MSF_LHOST_REQUIRED=1    the probe's "show options" marks LHOST required
+#   FAKE_MSF_HANG=1              the launch runs ~forever (for timeout tests)
+#   FAKE_MSF_NO_OPEN=1           the launch runs but never opens a session
+#   FAKE_MSF_FAIL=1              the launch crashes immediately (exit 1)
+#   FAKE_MSF_EVIDENCE_FAIL=1     the session exists but the evidence command
+#                                fails (no SAT_* markers are produced)
 
 set -u
 
@@ -25,12 +42,106 @@ if [[ -z "$RC" || ! -f "$RC" ]]; then
     exit 0
 fi
 
-if grep -q "vsftpd_234_backdoor" "$RC"; then
-    cat <<'OUT'
+# ------------------------------------------------------------------
+# Capability probe (resource contains "show options")
+# ------------------------------------------------------------------
+if grep -q "show options" "$RC"; then
+    if grep -qE "vsftpd_234_backdoor|usermap_script" "$RC"; then
+        echo "[*] Using configured payload cmd/linux/http/x86/meterpreter_reverse_tcp"
+        if grep -qF "set PAYLOAD cmd/unix/interact" "$RC"; then
+            echo "[-] The value specified for PAYLOAD is not valid."
+        fi
+        if grep -qF "set ExitOnSession false" "$RC"; then
+            echo "[!] Unknown datastore option: ExitOnSession."
+        fi
+        echo
+        echo "Payload options (cmd/linux/http/x86/meterpreter_reverse_tcp):"
+        echo "   FETCH_COMMAND   CURL     yes       Command to fetch payload"
+        echo "   FETCH_SRVHOST            no        Local IP to use for serving payload"
+        if [[ "${FAKE_MSF_LHOST_REQUIRED:-0}" == "1" ]]; then
+            echo "   LHOST                    yes       The listen address"
+        else
+            echo "   LHOST                    no        The listen address"
+        fi
+        echo "   LPORT           4444     yes       The listen port"
+        echo
+        echo "Exploit target:"
+        echo "   Id  Name"
+        echo "   --  ----"
+        echo "   0   Linux/Unix Command"
+        exit 0
+    fi
+    echo "[+] (fake) probe: unknown module"
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Launch stage (resource contains "exploit -j -z"). The process then stays
+# alive reading stdin, exactly like a real msfconsole after its -r script
+# finishes, so evidence can be collected through this same process.
+# ------------------------------------------------------------------
+if grep -q "exploit -j -z" "$RC"; then
+    if [[ "${FAKE_MSF_FAIL:-0}" == "1" ]]; then
+        echo "[-] Exploit failed (fake msf crash)"
+        exit 1
+    fi
+    if [[ "${FAKE_MSF_HANG:-0}" == "1" ]]; then
+        sleep 600
+        exit 0
+    fi
+
+    CREATED_ID=""
+    if grep -q "vsftpd_234_backdoor" "$RC" && [[ "${FAKE_MSF_NO_OPEN:-0}" != "1" ]]; then
+        CREATED_ID=1
+        cat <<'OUT'
 [*] Started reverse TCP handler
 [*] 203.0.113.7:21 - 203.0.113.7:21 - CONNECTED
 [*] Command shell session 1 opened (192.168.1.11:42101 -> 203.0.113.7:21)
 [*] Session 1 created.
+[*] Backgrounding session 1...
+OUT
+        echo "resource (fake-msf)> sessions -l"
+        cat <<'OUT'
+
+Active sessions
+===============
+
+  Id  Name  Type            Information                                  Connection
+  --  ----  ----            -----------                                  ----------
+  1        command shell    uid=0, gid=0 (metasploitable)                 192.168.1.11:42101 -> 203.0.113.7:21
+OUT
+    elif grep -q "usermap_script" "$RC"; then
+        cat <<'OUT'
+[*] Started bind TCP handler
+[-] Exploit completed, but no session was created.
+OUT
+        echo "resource (fake-msf)> sessions -l"
+        echo "No sessions"
+    elif [[ "${FAKE_MSF_NO_OPEN:-0}" == "1" ]]; then
+        echo "[*] Started reverse TCP handler"
+        echo "[-] Exploit completed, but no session was created."
+        echo "resource (fake-msf)> sessions -l"
+        echo "No sessions"
+    else
+        echo "[+] (fake) msfconsole launch finished, no session"
+        echo "resource (fake-msf)> sessions -l"
+        echo "No sessions"
+    fi
+
+    # Stay alive at the prompt and honor the commands the tool feeds through
+    # this same process's stdin (evidence must be collected while the session
+    # exists; only THIS process's session id is ever valid).
+    while IFS= read -r line; do
+        case "$line" in
+            *"sessions -c"*"-i"*)
+                sid="$(printf '%s\n' "$line" | sed -n 's/.*-i \([0-9][0-9]*\)[[:space:]]*$/\1/p')"
+                if [[ -n "$sid" && "$sid" == "$CREATED_ID" ]]; then
+                    if [[ "${FAKE_MSF_EVIDENCE_FAIL:-0}" == "1" ]]; then
+                        echo "[*] Running command against session $sid..."
+                        echo "[-] Error executing command: hostname (fake evidence failure)"
+                    else
+                        echo "[*] Running command against session $sid..."
+                        cat <<OUT
 SAT_HOSTNAME_START
 metasploitable
 SAT_USER_START
@@ -41,14 +152,33 @@ SAT_NET_START
 eth0      inet addr:203.0.113.7  Bcast:203.0.113.255  Mask:255.255.255.0
 SAT_EVIDENCE_END
 OUT
+                    fi
+                else
+                    echo "Please specify valid session identifier(s) using -i"
+                fi
+                ;;
+            exit*|quit*)
+                exit 0
+                ;;
+            *)
+                : # other console commands are accepted and ignored
+                ;;
+        esac
+    done
     exit 0
 fi
 
-if grep -q "usermap_script" "$RC"; then
-    cat <<'OUT'
-[*] Started bind TCP handler
-[-] Exploit completed, but no session was created.
-OUT
+# ------------------------------------------------------------------
+# Standalone evidence stage (legacy resource contains "sessions -c" without
+# a launch). No live session exists for a detached resource file, so no id
+# is ever fabricated here - only msf's own "-i" error is returned.
+# ------------------------------------------------------------------
+if grep -q "sessions -c" "$RC"; then
+    if grep -qE "sessions -c .* -i [0-9]+" "$RC"; then
+        echo "[-] Invalid session identifier: $(grep -oE 'sessions -c .* -i [0-9]+' "$RC" | grep -oE '[0-9]+$' | head -n1)"
+        exit 0
+    fi
+    echo "Please specify valid session identifier(s) using -i"
     exit 0
 fi
 

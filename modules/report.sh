@@ -144,6 +144,8 @@ md_append "- Open TCP services detected on scanned ports: **$OPEN_COUNT**."
 md_append "- Correlated exploit-candidate findings: **$FINDINGS_TOTAL** (tool categorical assessment, not CVSS)."
 if [[ "$SESSION_STATUS" == "session-created" ]]; then
     md_append "- Exploitation: a **session was created** in the authorized lab."
+elif [[ "$SESSION_STATUS" == "session-lost" ]]; then
+    md_append "- Exploitation: a **session was created** but was **lost before evidence could be collected**."
 elif [[ "$SESSION_STATUS" == "no-session" ]]; then
     md_append "- Exploitation: attempted but **no session was created**."
 else
@@ -279,10 +281,10 @@ md_append "> Severity is a categorical tool assessment (high/medium/low), **not 
 md_append "> No CVE/CVSS data is fabricated."
 md_append ""
 if [[ -n "$CORRELATION_DIR" && -f "$CORRELATION_DIR/correlated_findings.tsv" ]]; then
-    md_append "| Port | Service | Product | Version | Confidence | Severity | Exploit title | EDB |"
-    md_append "|---|---|---|---|---|---|---|---|"
-    while IFS=$'\t' read -r t port proto service product ver title edb path cve plat type q conf sev sevsrc reason; do
-        md_append "| ${port} | ${service} | ${product} | ${ver} | ${conf} | ${sev} | ${title} | ${edb} |"
+    md_append "| Port | Service | Product | Version | Match type | Confidence | Severity | Exploit title | EDB |"
+    md_append "|---|---|---|---|---|---|---|---|---|"
+    while IFS=$'\t' read -r t port proto service product ver title edb path cve plat type q conf sev sevsrc reason mt risk ev ve; do
+        md_append "| ${port} | ${service} | ${product} | ${ver} | ${mt} | ${conf} | ${sev} | ${title} | ${edb} |"
     done < <(tail -n +2 "$CORRELATION_DIR/correlated_findings.tsv")
 else
     md_append "- No correlated findings available (Phase 3/4 not completed or no matches)."
@@ -300,7 +302,7 @@ md_append "> SearchSploit index entries and detected services; severity/confiden
 md_append ""
 if [[ -n "$CORRELATION_DIR" && -f "$CORRELATION_DIR/correlated_findings.tsv" ]]; then
     FIND_IDX=0
-    while IFS=$'\t' read -r t port proto service product ver title edb path cve plat type q conf sev sevsrc reason; do
+    while IFS=$'\t' read -r t port proto service product ver title edb path cve plat type q conf sev sevsrc reason mt risk ev ve; do
         FIND_IDX=$((FIND_IDX + 1))
         md_append "### Candidate $FIND_IDX"
         md_append ""
@@ -310,6 +312,7 @@ if [[ -n "$CORRELATION_DIR" && -f "$CORRELATION_DIR/correlated_findings.tsv" ]];
         md_append "- **EDB-ID:** ${edb}"
         md_append "- **Path:** ${path}"
         md_append "- **CVE (as indexed):** ${cve:-none}"
+        md_append "- **Match type:** ${mt} (${ev})"
         md_append "- **Confidence:** ${conf} (${reason})"
         md_append "- **Severity:** ${sev} (tool assessment)"
         md_append ""
@@ -335,7 +338,7 @@ if [[ -n "$EXPLOIT_DIR" ]]; then
         done < "$EXPLOIT_DIR/result.txt"
     fi
     md_append ""
-    md_append "**Confirmed session:** $([ "$SESSION_STATUS" = session-created ] && echo yes || echo no)"
+    md_append "**Confirmed session:** $([[ "$SESSION_STATUS" == "session-created" || "$SESSION_STATUS" == "session-lost" ]] && echo yes || echo no)"
     if [[ -f "$EXPLOIT_DIR/exploit_output.txt" ]]; then
         md_append ""
         md_append "- Raw Metasploit output preserved at: $EXPLOIT_DIR/exploit_output.txt"
@@ -384,6 +387,8 @@ if [[ "$VULN_STATUS" == "dependency-missing" ]] || [[ -z "$VULN_RESEARCH_DIR" ]]
 fi
 if [[ -z "$EXPLOIT_DIR" ]] || [[ "$SESSION_STATUS" == "no-session" ]]; then
     md_append "- Exploitation did not succeed or was not run - target exploitability is unconfirmed."
+elif [[ "$SESSION_STATUS" == "session-lost" ]]; then
+    md_append "- A session was created but was lost before evidence could be collected - system evidence is incomplete."
 fi
 
 # ---------------------------------------------------------------

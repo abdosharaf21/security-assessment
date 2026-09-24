@@ -186,7 +186,9 @@ phase_correlation() {
 
 phase_exploit() {
     assert_module exploitation.sh
-    run_phase "Lab Exploitation (Metasploit)" "$MODULES_DIR/exploitation.sh" "$TARGET"
+    local extra=()
+    [[ $# -gt 0 ]] && extra=("$@")
+    run_phase "Lab Exploitation (Metasploit)" "$MODULES_DIR/exploitation.sh" "$TARGET" "${extra[@]}"
 }
 
 phase_evidence() {
@@ -274,7 +276,7 @@ run_assessment() {
         echo
         echo "[!] Assessment finished with errors (rc=$failrc): $id"
         echo "    Phase 5 (exploitation) only ever ran with explicit in-run approval."
-        echo "    Resume later with: ./$0 resume $id"
+        echo "    Resume later with: $0 resume $id"
     fi
     return "$failrc"
 }
@@ -443,7 +445,32 @@ cmd_scan() {
 
     check_dependencies "assessment"
     run_assessment "$target" "$mode"
-    exit $?
+    local rc=$?
+
+    # Quick scan intentionally runs discovery+enumeration only. On success we
+    # point at the existing continuation path and - only when stdin is an
+    # interactive terminal - offer Vulnerability Research. The default answer
+    # is NO so nothing ever runs automatically; piped/CI invocation is byte-for-
+    # byte unchanged apart from the hint line.
+    if (( rc == 0 )) && [[ "$mode" == "quick" ]]; then
+        echo
+        echo "[+] Quick scan complete: $SAT_ASSESSMENT_ID"
+        echo "    Continue later with: $0 resume $SAT_ASSESSMENT_ID"
+        if [[ -t 0 && -t 1 ]]; then
+            read -r -p "[?] Start Vulnerability Research now? [y/N]: " quick_next
+            case "$quick_next" in
+                y|Y)
+                    echo
+                    run_assessment_phase "$SAT_ASSESSMENT_ID" vulnerabilities || rc=$?
+                    ;;
+                *)
+                    echo "[-] Skipped Vulnerability Research (nothing was executed)."
+                    ;;
+            esac
+        fi
+    fi
+
+    exit "$rc"
 }
 
 cmd_status() {
@@ -1096,6 +1123,40 @@ cmd_preflight() {
     fi
 
     echo
+    echo "[*] Exploit mapping ($EXPLOIT_MAPPING_FILE):"
+    if [[ -f "$EXPLOIT_MAPPING_FILE" ]]; then
+        # format: service|product|version_prefix|msf_module|payload|notes
+        local badmap=0 lineno=0 nf service_key product_key version_key module payload
+        while IFS= read -r lm; do
+            [[ -z "$lm" || "$lm" == \#* ]] && continue
+            lineno=$((lineno + 1))
+            nf="$(awk -F'|' '{print NF}' <<<"$lm")"
+            if (( nf < 5 )); then
+                echo "  [-] mapping line $lineno has only $nf field(s) (need service|product|version|module|payload[|notes]): $lm" >&2
+                badmap=1
+                continue
+            fi
+            service_key="$(awk -F'|' '{print $1}' <<<"$lm")"
+            product_key="$(awk -F'|' '{print $2}' <<<"$lm")"
+            version_key="$(awk -F'|' '{print $3}' <<<"$lm")"
+            module="$(awk -F'|' '{print $4}' <<<"$lm")"
+            payload="$(awk -F'|' '{print $5}' <<<"$lm")"
+            if [[ -z "$service_key" || -z "$product_key" || -z "$version_key" || -z "$module" || -z "$payload" ]]; then
+                echo "  [-] mapping line $lineno has an empty required field: $lm" >&2
+                badmap=1
+            fi
+        done < <(grep -vE '^[[:space:]]*(#|$)' "$EXPLOIT_MAPPING_FILE")
+        if (( badmap == 1 )); then
+            echo "  [-] exploit mapping file has malformed entries (see above)" >&2
+            fail=1
+        else
+            echo "  [+] exploit mapping file structure OK ($lineno line(s))"
+        fi
+    else
+        echo "  [!] exploit mapping file missing: $EXPLOIT_MAPPING_FILE (exploitation will report no mapping)" >&2
+    fi
+
+    echo
     echo "[*] Scope / parallel settings:"
     if [[ "$ENUMERATION_WORKERS" =~ ^[0-9]+$ ]] && (( ENUMERATION_WORKERS >= 1 )); then
         echo "  [+] parallel workers  : $ENUMERATION_WORKERS (1 = sequential)"
@@ -1332,13 +1393,15 @@ cmd_legacy() {
             # Single-phase execution: exploitation ONLY. Evidence and
             # report are separate phases - they are never chained from a
             # single-phase command. See 'full' for the whole pipeline.
+            # Optional extra arguments (correlation_dir / candidate index /
+            # --risk / --port / --edb-id) are forwarded to the module.
             EXP_RC=0
-            phase_exploit || EXP_RC=$?
+            phase_exploit "${@:3}" || EXP_RC=$?
             echo
             echo "[+] Exploitation phase finished (exit code: $EXP_RC)."
             echo "    Evidence and report are separate phases; run them explicitly:"
-            echo "      ./$0 $TARGET evidence"
-            echo "      ./$0 $TARGET report"
+            echo "      $0 $TARGET evidence"
+            echo "      $0 $TARGET report"
             exit "$EXP_RC"
             ;;
         evidence)
@@ -1359,7 +1422,7 @@ cmd_legacy() {
             if (( PIPELINE_RC == 0 )); then phase_correlation || PIPELINE_RC=$?; fi
             if (( PIPELINE_RC == 0 )); then
                 EXP_RC=0
-                phase_exploit || EXP_RC=$?
+                phase_exploit "${@:3}" || EXP_RC=$?
                 phase_evidence || true
                 phase_report || true
                 PIPELINE_RC=$EXP_RC

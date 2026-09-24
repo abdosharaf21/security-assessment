@@ -11,7 +11,9 @@
 # Handled states (honestly reported):
 #   - exploitation not performed (no Phase 5 output / dependency missing)
 #   - exploitation attempted but no session created
-#   - session created (capable of collecting hostname/user/OS/network)
+#   - session created (evidence collected via the SAME live session)
+#   - session created but evidence failed/timed out (recorded as such)
+#   - session created but lost before evidence could be collected
 #
 # Exit codes:
 #   0  evidence gathered successfully (including a clear 'no session' record)
@@ -74,6 +76,16 @@ SESSION_STATUS="$(grep -E '^session_status=' "$RESULT_FILE" | head -n1 | cut -d=
 SESSION_ID="$(grep -E '^session_id=' "$RESULT_FILE" | head -n1 | cut -d= -f2-)"
 SESSION_TYPE="$(grep -E '^session_type=' "$RESULT_FILE" | head -n1 | cut -d= -f2-)"
 MODULE="$(grep -E '^selected_module=' "$RESULT_FILE" | head -n1 | cut -d= -f2-)"
+EVIDENCE_STATUS="$(grep -E '^evidence_status=' "$RESULT_FILE" | head -n1 | cut -d= -f2-)"
+# Backwards compatibility: infer from captured markers when Phase 5 predates
+# the evidence_status field (never invents data - only reads what exists).
+if [[ -z "$EVIDENCE_STATUS" ]]; then
+    if [[ -f "$OUT_FILE" ]] && grep -q "SAT_EVIDENCE_END" "$OUT_FILE"; then
+        EVIDENCE_STATUS="collected"
+    else
+        EVIDENCE_STATUS="not-attempted"
+    fi
+fi
 
 TIMESTAMP="$(sat_timestamp)"
 DIR="$OUTPUT_EVIDENCE/${SAFE_TARGET}_${TIMESTAMP}"
@@ -104,15 +116,21 @@ case "$SESSION_STATUS" in
             echo "session_status=$SESSION_STATUS"
             echo "session_type=${SESSION_TYPE:-}"
             echo "session_id=${SESSION_ID:-none}"
+            echo "evidence_status=$EVIDENCE_STATUS"
         } > "$DIR/session.txt"
 
-        # Extract system/network evidence captured by sessions -C, if any.
-        SYSTEM_NOTE="not captured (sessions -C output not found or unsupported)"
+        # Extract system/network evidence captured by the same-session
+        # collection, if any. Nothing is invented when it is absent.
+        SYSTEM_NOTE="not captured (sessions -c output not found or unsupported)"
         if [[ -f "$OUT_FILE" ]] && grep -q "SAT_EVIDENCE_END" "$OUT_FILE"; then
             awk '/SAT_HOSTNAME_START/{f=1;next}/SAT_EVIDENCE_END/{f=0} f' "$OUT_FILE" > "$DIR/system_info.raw.txt"
             grep -vE '^(ip|br-|docker|veth|lo:|virbr)' "$DIR/system_info.raw.txt" | grep -E 'hostname|whoami|uid=|Linux|^[a-zA-Z0-9_.-]+$' > "$DIR/system_info.txt" 2>/dev/null || true
             grep -A100 "SAT_NET_START" "$OUT_FILE" | sed 's/^/    /' | grep -vE '^\s*SAT_' > "$DIR/network_info.raw.txt" || true
             SYSTEM_NOTE="captured (see exploit_output.txt)"
+        elif [[ "$EVIDENCE_STATUS" == "timeout" ]]; then
+            SYSTEM_NOTE="not captured (evidence collection timed out)"
+        elif [[ "$EVIDENCE_STATUS" == "failed" ]]; then
+            SYSTEM_NOTE="not captured (evidence commands failed)"
         fi
 
         {
@@ -124,8 +142,39 @@ case "$SESSION_STATUS" in
             echo "selected_module=${MODULE:-}"
             echo "session_type=${SESSION_TYPE:-}"
             echo "session_id=${SESSION_ID:-none}"
+            echo "evidence_status=$EVIDENCE_STATUS"
             echo "system_info=${SYSTEM_NOTE}"
         } > "$DIR/metadata.txt"
+        # Evidence collection that failed or timed out is an honest
+        # incomplete record, not a success.
+        if [[ "$EVIDENCE_STATUS" == "collected" ]]; then
+            EVIDENCE_EXIT=0
+        else
+            EVIDENCE_EXIT=$EXIT_NO_DATA
+        fi
+        ;;
+
+    session-lost)
+        echo "[!] A session was created but was no longer available for evidence collection."
+        {
+            echo "session_status=$SESSION_STATUS"
+            echo "session_type=${SESSION_TYPE:-}"
+            echo "session_id=${SESSION_ID:-none}"
+            echo "evidence_status=$EVIDENCE_STATUS"
+        } > "$DIR/session.txt"
+        {
+            echo "Metadata for evidence collection (lab only)"
+            echo "-------------------------------------------"
+            echo "target=$TARGET"
+            echo "timestamp=$TIMESTAMP"
+            echo "exploit_dir=$EXPLOIT_DIR"
+            echo "selected_module=${MODULE:-}"
+            echo "session_type=${SESSION_TYPE:-}"
+            echo "session_id=${SESSION_ID:-none}"
+            echo "evidence_status=$EVIDENCE_STATUS"
+            echo "note=session existed but evidence could not be collected (session lost/failed) - no system evidence invented"
+        } > "$DIR/metadata.txt"
+        EVIDENCE_EXIT=$EXIT_NO_DATA
         ;;
 
     no-session)
@@ -133,6 +182,7 @@ case "$SESSION_STATUS" in
         {
             echo "session_status=no-session"
             echo "session_id=none"
+            echo "evidence_status=$EVIDENCE_STATUS"
         } > "$DIR/session.txt"
         {
             echo "Metadata for evidence collection (lab only)"
@@ -145,6 +195,7 @@ case "$SESSION_STATUS" in
             echo "session_id=none"
             echo "note=exploitation did not produce a session - no system evidence collected"
         } > "$DIR/metadata.txt"
+        EVIDENCE_EXIT=$EXIT_NO_DATA
         ;;
 
     *)
@@ -152,6 +203,7 @@ case "$SESSION_STATUS" in
         {
             echo "session_status=${SESSION_STATUS}"
             echo "session_id=none"
+            echo "evidence_status=$EVIDENCE_STATUS"
         } > "$DIR/session.txt"
         {
             echo "target=$TARGET"
@@ -159,6 +211,7 @@ case "$SESSION_STATUS" in
             echo "exploit_dir=$EXPLOIT_DIR"
             echo "note=unhandled exploitation status - no system evidence collected"
         } > "$DIR/metadata.txt"
+        EVIDENCE_EXIT=$EXIT_NO_DATA
         ;;
 esac
 
@@ -206,6 +259,7 @@ PY
     echo
     echo "Session status detected: ${SESSION_STATUS:-unknown}"
     echo "Session id: ${SESSION_ID:-none}"
+    echo "Evidence status: ${EVIDENCE_STATUS:-unknown}"
     echo
     echo "Files:"
     echo "  metadata.txt          - evidence metadata"
@@ -223,14 +277,15 @@ echo
 echo "[+] Phase 6 completed (honest record for state '$SESSION_STATUS')."
 echo "[-] Output directory: $DIR"
 
+# Honest exit semantics: complete collected evidence (or an explicit,
+# complete 'no session' vs 'session lost/failed' record) is reflected in
+# EVIDENCE_EXIT by the status case above - evidence failure/timeout is
+# never reported as a successful collection.
 case "$SESSION_STATUS" in
-    session-created)
-        exit "$EXIT_OK"
-        ;;
     dependency-missing)
         exit "$EXIT_DEPENDENCY"
         ;;
     *)
-        exit "$EXIT_NO_DATA"
+        exit "${EVIDENCE_EXIT:-$EXIT_NO_DATA}"
         ;;
 esac

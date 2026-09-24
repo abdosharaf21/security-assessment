@@ -266,6 +266,52 @@ sat_enum_service_txt() {
 }
 
 # ---------------------------------------------------------------
+# Assessment-scoped enumeration artifact resolution
+# ---------------------------------------------------------------
+#
+# Enumeration runs inside an assessment write their Stage-2 artifacts under
+# output/assessments/<id>/enumeration/, which the standalone/legacy phase
+# entry points would otherwise never see. sat_assessment_enum_xml closes
+# that gap: it resolves the newest compatible Stage-2 enumeration service
+# XML for a target across every assessment (newest assessment wins, judged
+# by its nanosecond id; within one assessment sat_enum_service_xml already
+# picks the newest Stage-2 run). Stage-1 ".ports.xml" artifacts are never
+# returned.
+
+sat_assessment_enum_xml() {
+    # sat_assessment_enum_xml <target> -> absolute path of the newest
+    # assessment-scoped Stage-2 enumeration XML for <target>, or nothing.
+    local target="${1:-}" prefix root m id dir tgt xml best="" best_id=""
+    prefix="$(sat_safe_name "$target")"
+    root="${ASSESSMENTS_ROOT:-$OUTPUT_ROOT/assessments}"
+    [[ -n "$prefix" && -d "$root" ]] || { printf ''; return 0; }
+    for m in "$root"/assessment_*/manifest.json; do
+        [[ -f "$m" ]] || continue
+        tgt="$(python3 - "$m" 2>/dev/null <<'PY'
+import json
+import sys
+try:
+    with open(sys.argv[1]) as fh:
+        print((json.load(fh).get('target') or ''))
+except Exception:
+    print('')
+PY
+)"
+        [[ -n "$tgt" && "$tgt" == "$target" ]] || continue
+        dir="${m%/manifest.json}/enumeration"
+        [[ -d "$dir" ]] || continue
+        xml="$(sat_enum_service_xml "$dir" "$prefix")"
+        [[ -n "$xml" ]] || continue
+        id="${m%/manifest.json}"
+        if [[ -z "$best_id" || "$id" > "$best_id" ]]; then
+            best="$xml"
+            best_id="$id"
+        fi
+    done
+    printf '%s' "$best"
+}
+
+# ---------------------------------------------------------------
 # Target validation
 # ---------------------------------------------------------------
 

